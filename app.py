@@ -2,6 +2,9 @@ import tkinter as tk
 import tkinter.messagebox as mb
 from tkinter import ttk
 from tkinter import filedialog
+
+import customtkinter as ctk
+
 import subprocess
 import socket
 import signal
@@ -43,6 +46,10 @@ auto = mp.Value("i", 1)
 force_lock = mp.Value("i", 0)
 control_lock = mp.Value("i", 0)
 program_lock = mp.Value("i", 0)
+
+# Настройки внешнего вида
+ctk.set_appearance_mode("Dark")  # Темы: "Dark", "Light", "System"
+ctk.set_default_color_theme("blue")  # Темы: "blue", "green", "dark-blue"
 
 
 def setup_status_logging(log_dir="logs", max_bytes=10 * 1024 * 1024, backup_count=5):
@@ -319,254 +326,340 @@ async def ashido(nsteps, step, pause_time, vel, angle=0, is_hirurg=0, tool_lengt
     program_lock.value = 0
 
 
-class ScriptRunnerApp:
-    attempt_d_counter = 0
-    attempt_h_counter = 0
-    cam_h_state = False
-    cam_d_state = False
+class RobotControlUI(ctk.CTk):
+    def __init__(self):
+        super().__init__()
 
-    def __init__(self, root):
-        self.root = root
-        self.root.title('ЕППУИХ')
+        # Конфигурация главного окна
+        self.title('ЕППУИХ - Система управления манипуляторами')
+        self.geometry("1100x750")
+        self.minsize(900, 650)
 
+        # Переменные системы
         self.threads = []
         self.processes = {}
         self.heartbeat = mp.Queue()
         self.heartbeat_timeout = 10.0
         self.restart_delays = {}
-
-        tabs = ttk.Notebook(root)
-        control_tab = ttk.Frame(tabs)
-        cam_tab = ttk.Frame(tabs)
-        telemetry_tab = ttk.Frame(tabs)
-        route_tab = ttk.Frame(tabs)
-        aphi_tab = ttk.Frame(tabs)
-        ashido_tab = ttk.Frame(tabs)
-
-        tabs.add(control_tab, text='РПК')
-        tabs.add(route_tab, text='ППУИ')
-        tabs.add(aphi_tab, text="АПХИ")
-        tabs.add(ashido_tab, text="АСХИДО")
-        tabs.add(cam_tab, text="Камеры")
-        tabs.add(telemetry_tab, text="Телеметрия")
-        tabs.pack(expand=1, fill="both")
-
-        # self.label = tk.Label(root, text= "Запуск системы управления")
-
-        self.system_launch_btn = tk.Button(control_tab, text='Запуск системы', command=self.system_launch,
-                                           state=tk.NORMAL)
-        self.system_launch_btn.grid(column=0, row=0, padx=5, pady=15)
-
-        self.system_stop_btn = tk.Button(control_tab, text='Остановка системы', command=self.system_stop,
-                                         state=tk.DISABLED)
-        self.system_stop_btn.grid(column=1, row=0, padx=5, pady=15)
-
-        self.control_launch_btn = tk.Button(control_tab, text='Запуск управления', command=self.control_launch,
-                                            state=tk.DISABLED)
-        self.control_launch_btn.grid(column=0, row=1, padx=10, pady=10)
-
-        self.control_stop_btn = tk.Button(control_tab, text='Остановка управления', command=self.control_stop,
-                                          state=tk.DISABLED)
-        self.control_stop_btn.grid(column=1, row=1, padx=10, pady=10)
-
-        self.align_btn = tk.Button(control_tab, text='Выравнивание роботов', command=self.align, state=tk.DISABLED)
-        self.align_btn.grid(column=0, row=2, padx=10, pady=10)
-
-        self.unlock_btn = tk.Button(control_tab, text='Разблокировать роботов', command=self.unlock)
-        self.unlock_btn.grid(column=1, row=2, padx=10, pady=10)
-
-        self.save_d_route_btn = tk.Button(control_tab, text='Сохранить маршрут диагноста', command=self.save_d_route)
-        self.save_d_route_btn.grid(column=2, row=0, padx=10, pady=10)
-
-        self.save_h_route_btn = tk.Button(control_tab, text='Сохранить маршрут хирурга', command=self.save_h_route)
-        self.save_h_route_btn.grid(column=3, row=0, padx=10, pady=10)
-
-        self.launch_d_route_btn = tk.Button(control_tab, text='Запуск маршрута диагноста из файла',
-                                            command=self.launch_d_route)
-        self.launch_d_route_btn.grid(column=2, row=1, padx=10, pady=10)
-
-        self.launch_h_route_btn = tk.Button(control_tab, text='Запуск маршрута хирурга из файла',
-                                            command=self.launch_h_route)
-        self.launch_h_route_btn.grid(column=3, row=1, padx=10, pady=10)
-
-        self.cam_d_btn = tk.Button(cam_tab, text='Камера диагноста', command=self.cam_d)
-        self.cam_d_btn.grid(column=0, row=0, padx=10, pady=10)
-
-        self.cam_d_btn = tk.Button(cam_tab, text='Камера хирурга', command=self.cam_h)
-        self.cam_d_btn.grid(column=1, row=0, padx=10, pady=10)
-
-        self.num_steps_label = tk.Label(route_tab, text="Количество шагов")
-        self.num_steps_label.grid(column=0, row=0)
-
-        self.step_val_label = tk.Label(route_tab, text="Величина шага, м")
-        self.step_val_label.grid(column=0, row=1, padx=1, pady=10)
-
-        self.step_x_label = tk.Label(route_tab, text="x:")
-        self.step_x_label.grid(column=1, row=1, padx=1, pady=10)
-
-        self.step_x_entry = tk.Entry(route_tab)
-        self.step_x_entry.grid(column=2, row=1, padx=2, pady=10)
-
-        self.step_y_label = tk.Label(route_tab, text="y:")
-        self.step_y_label.grid(column=3, row=1, padx=1, pady=10)
-
-        self.step_y_entry = tk.Entry(route_tab)
-        self.step_y_entry.grid(column=4, row=1, padx=2, pady=10)
-
-        self.step_z_label = tk.Label(route_tab, text="z:")
-        self.step_z_label.grid(column=5, row=1, padx=1, pady=10)
-
-        self.step_z_entry = tk.Entry(route_tab)
-        self.step_z_entry.grid(column=6, row=1, padx=2, pady=10)
-
-        self.pause_time_label = tk.Label(route_tab, text="Время остановки")
-        self.pause_time_label.grid(column=0, row=2, padx=10, pady=10)
-
-        self.velocity_label = tk.Label(route_tab, text="Скорость, м/с")
-        self.velocity_label.grid(column=0, row=3, padx=1, pady=10)
-
-        self.num_steps_entry = tk.Entry(route_tab)
-        self.num_steps_entry.grid(column=1, row=0, padx=1, pady=10)
-
-        self.pause_time_entry = tk.Entry(route_tab)
-        self.pause_time_entry.grid(column=1, row=2, padx=1, pady=10)
-
-        self.velocity_entry = tk.Entry(route_tab)
-        self.velocity_entry.grid(column=1, row=3, padx=10, pady=10)
-
-        self.start_route_btn = tk.Button(route_tab, text="Начать маршрут", command=self.start_route)
-        self.start_route_btn.grid(column=0, row=4)
-
-        self.stop_route_btn = tk.Button(route_tab, text="Остановить маршрут", command=self.stop_routef)
-        self.stop_route_btn.grid(column=1, row=4)
-
-        self.return_to_start_btn = tk.Button(route_tab, text="Вернуться в исходную точку", command=self.return_to_start)
-        self.return_to_start_btn.grid(column=2, row=4)
-
-        self.save_route_btn = tk.Button(route_tab, text="Сохранить данные маршрута", command=self.save_route)
-        self.save_route_btn.grid(column=0, row=5)
-
-        self.move_angle_label = tk.Label(aphi_tab, text="Угол продвижения в градусах")
-        self.move_angle_label.grid(column=0, row=0, padx=1, pady=10)
-
-        self.move_angle_entry = tk.Entry(aphi_tab)
-        self.move_angle_entry.grid(column=1, row=0, padx=1, pady=10)
-
-        self.aphi_num_steps_label = tk.Label(aphi_tab, text="Количество шагов")
-        self.aphi_num_steps_label.grid(column=0, row=1)
-
-        self.aphi_num_steps_entry = tk.Entry(aphi_tab)
-        self.aphi_num_steps_entry.grid(column=1, row=1)
-
-        self.aphi_step_val_label = tk.Label(aphi_tab, text="Величина шага, м")
-        self.aphi_step_val_label.grid(column=0, row=2, padx=1, pady=10)
-
-        self.aphi_step_val_entry = tk.Entry(aphi_tab)
-        self.aphi_step_val_entry.grid(column=1, row=2)
-
-        self.aphi_pause_time_label = tk.Label(aphi_tab, text="Время остановки")
-        self.aphi_pause_time_label.grid(column=0, row=3, padx=10, pady=10)
-
-        self.aphi_pause_time_entry = tk.Entry(aphi_tab)
-        self.aphi_pause_time_entry.grid(column=1, row=3)
-
-        self.aphi_velocity_label = tk.Label(aphi_tab, text="Скорость, м/с")
-        self.aphi_velocity_label.grid(column=0, row=4, padx=1, pady=10)
-
-        self.aphi_velocity_entry = tk.Entry(aphi_tab)
-        self.aphi_velocity_entry.grid(column=1, row=4)
-
-        self.start_aphi_btn = tk.Button(aphi_tab, text="Начать продвижение", command=self.start_aphi)
-        self.start_aphi_btn.grid(column=0, row=5)
-
-        self.stop_aphi_btn = tk.Button(aphi_tab, text="Остановить продвижение", command=self.stop_aphi)
-        self.stop_aphi_btn.grid(column=0, row=6)
-
-        self.return_to_zero_btn = tk.Button(aphi_tab, text="Вернуться в исходную точку", command=self.fuck_go_back)
-        self.return_to_zero_btn.grid(column=1, row=5)
-
-        self.save_aphi_btn = tk.Button(aphi_tab, text="Сохранить данные пути", command=self.save_aphi)
-        self.save_aphi_btn.grid(column=1, row=6)
-
-        self.ashido_position_btn = tk.Button(ashido_tab, text="Установить хирурга в начальную точку",
-                                             command=self.ashido_pos)
-        self.ashido_position_btn.grid(column=0, row=0)
-        self.ashido_start_btn = tk.Button(ashido_tab, text="НАЧАТЬ", command=self.ashido_start)
-        self.ashido_start_btn.grid(column=0, row=1)
-
-        self.is_diagnost_connected_label = tk.Label(telemetry_tab, text="Статус подключения диагноста:")
-        self.is_diagnost_connected_label.grid(column=0, row=0)
-
-        self.diagnost_status_label = tk.Label(telemetry_tab, text=" ")
-        self.diagnost_status_label.grid(column=1, row=0)
-
-        self.is_hirurg_connected_label = tk.Label(telemetry_tab, text="Статус подключения хирурга:")
-        self.is_hirurg_connected_label.grid(column=0, row=1)
-
-        self.hirurg_status_label = tk.Label(telemetry_tab, text=" ")
-        self.hirurg_status_label.grid(column=1, row=1)
-
-        self.diagnost_las_label = tk.Label(telemetry_tab, text="Показания лазерного датчика диагноста:")
-        self.diagnost_las_label.grid(column=0, row=2)
-
-        self.diagnost_las_data_label = tk.Label(telemetry_tab, text=" ")
-        self.diagnost_las_data_label.grid(column=1, row=2)
-
-        self.hirurg_las_label = tk.Label(telemetry_tab, text="Показания лазерного датчика хирурга:")
-        self.hirurg_las_label.grid(column=0, row=3)
-
-        self.hirurg_las_data_label = tk.Label(telemetry_tab, text=" ")
-        self.hirurg_las_data_label.grid(column=1, row=3)
-
-        self.diagnost_force_label = tk.Label(telemetry_tab, text="Показания силового датчика диагноста:")
-        self.diagnost_force_label.grid(column=0, row=4)
-
-        self.diagnost_force_data_label = tk.Label(telemetry_tab, text=" ")
-        self.diagnost_force_data_label.grid(column=1, row=4)
-
-        self.hirurg_force_label = tk.Label(telemetry_tab, text="Показания силового датчика хирурга:")
-        self.hirurg_force_label.grid(column=0, row=5)
-
-        self.hirurg_force_data_entry = tk.Entry(telemetry_tab, textvariable="0", state="disabled")
-        self.hirurg_force_data_entry.grid(column=1, row=5)
-
-        self.control_h_process = mp.Process(target=Joystick_hirurg.main,
-                                            args=(self.heartbeat, auto, program_lock, hirurg_path), daemon = True, name="hirurg_control")
-        self.control_d_process = mp.Process(target=Joystick_diagnost.main,
-                                            args=(self.heartbeat, auto, shared_path, force_lock, program_lock), daemon = True, name ="diagnost_control")
-        self.align_h_process = mp.Process(target=Align_H.main)
-        self.power_on_h_process = mp.Process(target=Power_On_H.main)
-        self.power_on_d_process = mp.Process(target=Power_On_D.main)
-        self.power_off_h_process = mp.Process(target=Power_Off_H.main)
-        self.power_off_d_process = mp.Process(target=Power_Off_D.main)
-        self.align_d_process = mp.Process(target=Align_D.main)
-        self.unlock_h_process = mp.Process(target=ESTOP_RESET_H.main)
-        self.unlock_d_process = mp.Process(target=ESTOP_RESET_D.main)
-        self.cam_d_process = mp.Process(target=camDiagn.main)
-        self.cam_h_process = mp.Process(target=camHirurg.main)
-
-        self.telemetry_logger = CSVLogger("logs/telemetry_log.csv")
-        self.tel_logging_var = tk.BooleanVar(value=False)
-
-        self.toggle_telemetry_log_label = ttk.Label(telemetry_tab, text="Управление логированием")
-        self.toggle_telemetry_log_label.grid(column =0, row=6)
-
-        self.toggle_telemetry_log_btn = ttk.Checkbutton(telemetry_tab, text="Включить логирование в csv", variable=self.tel_logging_var, command=self.toggle_telemetry_logging)
-        self.toggle_telemetry_log_btn.grid(column=0,row=7)
-
-        self.telemetry_logging_status_label = ttk.Label(telemetry_tab, text="Логирование телеметрии: ОТКЛЮЧЕНО", foreground="red")
-        self.telemetry_logging_status_label.grid(column=1, row=7)
-
-
-        self.monitor = Thread(target=self.system_monitor, daemon=True)
-        self.monitor.start()
-
-        self.watchdog_thread = Thread(target = self.watchdog, daemon=True, name= "Watchdog")
-        self.watchdog_thread.start()
-        logger.info(f"Запущен фоновый монитор сердцебиения (поток: {self.watchdog_thread.name})")
-
-        # self.force_control_thread = Thread(target=force_control, args = (17,))
-        # self.force_control_thread.start()
+        self.tel_logging_var = ctk.BooleanVar(value=False)
+
+        # Переменные для телеметрии
+        self.telemetry_vars = {
+            'diag_status': ctk.StringVar(value="Откл"),
+            'hir_status': ctk.StringVar(value="Откл"),
+            'diag_las': ctk.StringVar(value="0.00"),
+            'hir_las': ctk.StringVar(value="0.00"),
+            'diag_force': ctk.StringVar(value="0.00"),
+            'hir_force': ctk.StringVar(value="0.00")
+        }
+
+        self.telemetry_logger = None
+
+        # Создание интерфейса
+        self.create_tabs()
+
+    def create_tabs(self):
+        """Создание вкладок"""
+        self.tab_view = ctk.CTkTabview(self, corner_radius=10)
+        self.tab_view.pack(expand=True, fill="both", padx=10, pady=10)
+
+        # Создание вкладок
+        self.control_tab = self.tab_view.add('РПК')
+        self.route_tab = self.tab_view.add('ППУИ')
+        self.aphi_tab = self.tab_view.add('АПХИ')
+        self.ashido_tab = self.tab_view.add('АСХИДО')
+        self.cam_tab = self.tab_view.add('Камеры')
+        self.telemetry_tab = self.tab_view.add('Телеметрия')
+
+        # Заполнение вкладок
+        self.create_control_tab()
+        self.create_route_tab()
+        self.create_aphi_tab()
+        self.create_ashido_tab()
+        self.create_cam_tab()
+        self.create_telemetry_tab()
+
+    def create_control_tab(self):
+        """Вкладка основного управления (РПК)"""
+        # Сетка для вкладок
+        self.control_tab.grid_columnconfigure(0, weight=1)
+        self.control_tab.grid_columnconfigure(1, weight=1)
+        self.control_tab.grid_rowconfigure(0, weight=0)
+        self.control_tab.grid_rowconfigure(1, weight=0)
+
+        # --- Левая колонка: Система и Роботы ---
+        left_frame = ctk.CTkFrame(self.control_tab, corner_radius=10)
+        left_frame.grid(column=0, row=0, rowspan=2, padx=10, pady=10, sticky="nsew")
+
+        # Система
+        sys_label = ctk.CTkLabel(left_frame, text="СИСТЕМА", font=ctk.CTkFont(size=14, weight="bold"))
+        sys_label.grid(column=0, row=0, columnspan=2, pady=(10, 5))
+
+        self.system_launch_btn = ctk.CTkButton(left_frame, text='Запуск системы', command=self.system_launch,
+                                               fg_color="#2CC985", hover_color="#25A56E")
+        self.system_launch_btn.grid(column=0, row=1, padx=10, pady=5, sticky="ew")
+
+        self.system_stop_btn = ctk.CTkButton(left_frame, text='Остановка системы', command=self.system_stop,
+                                             state="disabled", fg_color="#E74C3C", hover_color="#C0392B")
+        self.system_stop_btn.grid(column=1, row=1, padx=10, pady=5, sticky="ew")
+
+        # Разделитель
+        sep1 = ctk.CTkFrame(left_frame, height=2, fg_color="#555555")
+        sep1.grid(column=0, row=2, columnspan=2, pady=10, sticky="ew")
+
+        # Управление
+        robot_label = ctk.CTkLabel(left_frame, text="РОБОТЫ", font=ctk.CTkFont(size=14, weight="bold"))
+        robot_label.grid(column=0, row=3, columnspan=2, pady=(10, 5))
+
+        self.control_launch_btn = ctk.CTkButton(left_frame, text='Запуск управления', command=self.control_launch,
+                                                state="disabled")
+        self.control_launch_btn.grid(column=0, row=4, padx=10, pady=5, sticky="ew")
+
+        self.control_stop_btn = ctk.CTkButton(left_frame, text='Остановка упр.', command=self.control_stop,
+                                              state="disabled",
+                                              fg_color="#E74C3C", hover_color="#C0392B")
+        self.control_stop_btn.grid(column=1, row=4, padx=10, pady=5, sticky="ew")
+
+        self.align_btn = ctk.CTkButton(left_frame, text='Выравнивание', command=self.align, state="disabled")
+        self.align_btn.grid(column=0, row=5, padx=10, pady=5, sticky="ew")
+
+        self.unlock_btn = ctk.CTkButton(left_frame, text='Разблокировка', command=self.unlock,
+                                        fg_color="#E67E22", hover_color="#D35400")
+        self.unlock_btn.grid(column=1, row=5, padx=10, pady=5, sticky="ew")
+
+        # --- Правая колонка: Маршруты ---
+        right_frame = ctk.CTkFrame(self.control_tab, corner_radius=10)
+        right_frame.grid(column=1, row=0, rowspan=2, padx=10, pady=10, sticky="nsew")
+
+        route_label = ctk.CTkLabel(right_frame, text="МАРШРУТЫ (ФАЙЛЫ)", font=ctk.CTkFont(size=14, weight="bold"))
+        route_label.grid(column=0, row=0, pady=10)
+
+        self.save_d_route_btn = ctk.CTkButton(right_frame, text='Сохранить маршрут диагноста',
+                                              command=self.save_d_route)
+        self.save_d_route_btn.grid(column=0, row=1, padx=10, pady=5, sticky="ew")
+
+        self.save_h_route_btn = ctk.CTkButton(right_frame, text='Сохранить маршрут хирурга', command=self.save_h_route)
+        self.save_h_route_btn.grid(column=0, row=2, padx=10, pady=5, sticky="ew")
+
+        self.launch_d_route_btn = ctk.CTkButton(right_frame, text='Запуск маршрута диагноста',
+                                                command=self.launch_d_route,
+                                                fg_color="#3498DB", hover_color="#2980B9")
+        self.launch_d_route_btn.grid(column=0, row=3, padx=10, pady=5, sticky="ew")
+
+        self.launch_h_route_btn = ctk.CTkButton(right_frame, text='Запуск маршрута хирурга',
+                                                command=self.launch_h_route,
+                                                fg_color="#3498DB", hover_color="#2980B9")
+        self.launch_h_route_btn.grid(column=0, row=4, padx=10, pady=5, sticky="ew")
+
+        right_frame.grid_columnconfigure(0, weight=1)
+
+    def create_route_tab(self):
+        """Вкладка настройки маршрута (ППУИ)"""
+        self.route_tab.grid_columnconfigure(0, weight=1)
+
+        # Параметры
+        params_frame = ctk.CTkFrame(self.route_tab, corner_radius=10)
+        params_frame.grid(column=0, row=0, padx=10, pady=10, sticky="nsew")
+        params_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(params_frame, text="ПАРАМЕТРЫ ДВИЖЕНИЯ", font=ctk.CTkFont(size=14, weight="bold")).grid(column=0,
+                                                                                                             row=0,
+                                                                                                             columnspan=4,
+                                                                                                             pady=10)
+
+        # Количество шагов
+        ctk.CTkLabel(params_frame, text="Количество шагов:").grid(column=0, row=1, sticky="e", padx=10, pady=5)
+        self.num_steps_entry = ctk.CTkEntry(params_frame, width=100)
+        self.num_steps_entry.grid(column=1, row=1, sticky="w", padx=5, pady=5)
+
+        # Величина шага
+        ctk.CTkLabel(params_frame, text="Величина шага (м):").grid(column=0, row=2, sticky="e", padx=10, pady=5)
+
+        ctk.CTkLabel(params_frame, text="X:").grid(column=2, row=2, padx=5)
+        self.step_x_entry = ctk.CTkEntry(params_frame, width=60)
+        self.step_x_entry.grid(column=3, row=2, padx=2, pady=5)
+
+        ctk.CTkLabel(params_frame, text="Y:").grid(column=4, row=2, padx=5)
+        self.step_y_entry = ctk.CTkEntry(params_frame, width=60)
+        self.step_y_entry.grid(column=5, row=2, padx=2, pady=5)
+
+        ctk.CTkLabel(params_frame, text="Z:").grid(column=6, row=2, padx=5)
+        self.step_z_entry = ctk.CTkEntry(params_frame, width=60)
+        self.step_z_entry.grid(column=7, row=2, padx=2, pady=5)
+
+        # Время и скорость
+        ctk.CTkLabel(params_frame, text="Время остановки (с):").grid(column=0, row=3, sticky="e", padx=10, pady=5)
+        self.pause_time_entry = ctk.CTkEntry(params_frame, width=100)
+        self.pause_time_entry.grid(column=1, row=3, sticky="w", padx=5, pady=5)
+
+        ctk.CTkLabel(params_frame, text="Скорость (м/с):").grid(column=0, row=4, sticky="e", padx=10, pady=5)
+        self.velocity_entry = ctk.CTkEntry(params_frame, width=100)
+        self.velocity_entry.grid(column=1, row=4, sticky="w", padx=5, pady=5)
+
+        # Кнопки действий
+        btn_frame = ctk.CTkFrame(self.route_tab, corner_radius=10)
+        btn_frame.grid(column=0, row=1, padx=10, pady=10, sticky="nsew")
+        btn_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        self.start_route_btn = ctk.CTkButton(btn_frame, text="▶ Начать маршрут", command=self.start_route,
+                                             fg_color="#2CC985", hover_color="#25A56E")
+        self.start_route_btn.grid(column=0, row=0, padx=5, pady=10)
+
+        self.stop_route_btn = ctk.CTkButton(btn_frame, text="⏹ Остановить", command=self.stop_routef,
+                                            fg_color="#E74C3C", hover_color="#C0392B")
+        self.stop_route_btn.grid(column=1, row=0, padx=5, pady=10)
+
+        self.return_to_start_btn = ctk.CTkButton(btn_frame, text="↩ Вернуться в начало", command=self.return_to_start)
+        self.return_to_start_btn.grid(column=2, row=0, padx=5, pady=10)
+
+        self.save_route_btn = ctk.CTkButton(btn_frame, text="💾 Сохранить данные", command=self.save_route)
+        self.save_route_btn.grid(column=3, row=0, padx=5, pady=10)
+
+    def create_aphi_tab(self):
+        """Вкладка АПХИ"""
+        self.aphi_tab.grid_columnconfigure(0, weight=1)
+
+        settings_frame = ctk.CTkFrame(self.aphi_tab, corner_radius=10)
+        settings_frame.grid(column=0, row=0, padx=20, pady=20, sticky="nsew")
+        settings_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(settings_frame, text="НАСТРОЙКИ ПРОДВИЖЕНИЯ", font=ctk.CTkFont(size=14, weight="bold")).grid(
+            column=0, row=0, columnspan=2, pady=15)
+
+        # Поля ввода
+        entries_config = [
+            ("Угол продвижения (°)", "move_angle_entry"),
+            ("Количество шагов", "aphi_num_steps_entry"),
+            ("Величина шага (м)", "aphi_step_val_entry"),
+            ("Время остановки (с)", "aphi_pause_time_entry"),
+            ("Скорость (м/с)", "aphi_velocity_entry")
+        ]
+
+        for i, (label_text, attr_name) in enumerate(entries_config):
+            ctk.CTkLabel(settings_frame, text=label_text).grid(column=0, row=i + 1, sticky="e", padx=10, pady=8)
+            entry = ctk.CTkEntry(settings_frame, width=150)
+            entry.grid(column=1, row=i + 1, sticky="w", padx=10, pady=8)
+            setattr(self, attr_name, entry)
+
+        # Кнопки
+        btn_frame = ctk.CTkFrame(self.aphi_tab, corner_radius=10)
+        btn_frame.grid(column=0, row=1, padx=20, pady=10)
+
+        self.start_aphi_btn = ctk.CTkButton(btn_frame, text="▶ Начать продвижение", command=self.start_aphi,
+                                            fg_color="#2CC985", hover_color="#25A56E", width=180)
+        self.start_aphi_btn.grid(column=0, row=0, padx=10, pady=10)
+
+        self.stop_aphi_btn = ctk.CTkButton(btn_frame, text="⏹ Остановить", command=self.stop_aphi,
+                                           fg_color="#E74C3C", hover_color="#C0392B", width=150)
+        self.stop_aphi_btn.grid(column=1, row=0, padx=10, pady=10)
+
+        self.return_to_zero_btn = ctk.CTkButton(btn_frame, text="↩ Сброс позиции", command=self.fuck_go_back, width=150)
+        self.return_to_zero_btn.grid(column=2, row=0, padx=10, pady=10)
+
+        self.save_aphi_btn = ctk.CTkButton(btn_frame, text="💾 Сохранить путь", command=self.save_aphi, width=150)
+        self.save_aphi_btn.grid(column=3, row=0, padx=10, pady=10)
+
+    def create_ashido_tab(self):
+        """Вкладка АСХИДО"""
+        # Центрирование контента
+        self.ashido_tab.grid_rowconfigure(0, weight=1)
+        self.ashido_tab.grid_columnconfigure(0, weight=1)
+
+        frame = ctk.CTkFrame(self.ashido_tab, corner_radius=15, border_width=2, border_color="#3498DB")
+        frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(frame, text="ПОЗИЦИОНИРОВАНИЕ ХИРУРГА", font=ctk.CTkFont(size=16, weight="bold")).grid(column=0,
+                                                                                                            row=0,
+                                                                                                            pady=20)
+
+        self.ashido_position_btn = ctk.CTkButton(frame, text="📍 Установить в начальную точку", command=self.ashido_pos,
+                                                 width=300, height=40)
+        self.ashido_position_btn.grid(column=0, row=1, pady=15)
+
+        self.ashido_start_btn = ctk.CTkButton(frame, text="🚀 НАЧАТЬ РАБОТУ", command=self.ashido_start,
+                                              fg_color="#2CC985", hover_color="#25A56E", width=300, height=50,
+                                              font=ctk.CTkFont(size=14, weight="bold"))
+        self.ashido_start_btn.grid(column=0, row=2, pady=15)
+
+    def create_cam_tab(self):
+        """Вкладка Камеры"""
+        self.cam_tab.grid_rowconfigure(0, weight=1)
+        self.cam_tab.grid_columnconfigure(0, weight=1)
+
+        frame = ctk.CTkFrame(self.cam_tab, corner_radius=15)
+        frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        ctk.CTkLabel(frame, text="УПРАВЛЕНИЕ ВИДЕОПОТОКОМ", font=ctk.CTkFont(size=14, weight="bold")).grid(column=0,
+                                                                                                           row=0,
+                                                                                                           columnspan=2,
+                                                                                                           pady=20)
+
+        self.cam_d_btn = ctk.CTkButton(frame, text='📷 Камера диагноста', command=self.cam_d, width=200, height=50)
+        self.cam_d_btn.grid(column=0, row=1, padx=20, pady=20)
+
+        self.cam_h_btn = ctk.CTkButton(frame, text='📷 Камера хирурга', command=self.cam_h, width=200, height=50)
+        self.cam_h_btn.grid(column=1, row=1, padx=20, pady=20)
+
+    def create_telemetry_tab(self):
+        """Вкладка Телеметрия"""
+        self.telemetry_tab.grid_columnconfigure((0, 1), weight=1)
+
+        # Статус подключения
+        conn_frame = ctk.CTkFrame(self.telemetry_tab, corner_radius=10)
+        conn_frame.grid(column=0, row=0, columnspan=2, sticky="nsew", padx=10, pady=10)
+        conn_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(conn_frame, text="СТАТУС ПОДКЛЮЧЕНИЯ", font=ctk.CTkFont(size=14, weight="bold")).grid(column=0,
+                                                                                                           row=0,
+                                                                                                           columnspan=3,
+                                                                                                           pady=10)
+
+        self._create_telemetry_row(conn_frame, 1, "Диагност:", self.telemetry_vars['diag_status'],
+                                   status_color="#2CC985")
+        self._create_telemetry_row(conn_frame, 2, "Хирург:", self.telemetry_vars['hir_status'], status_color="#2CC985")
+
+        # Датчики
+        sensor_frame = ctk.CTkFrame(self.telemetry_tab, corner_radius=10)
+        sensor_frame.grid(column=0, row=1, columnspan=2, sticky="nsew", padx=10, pady=10)
+        sensor_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(sensor_frame, text="ПОКАЗАНИЯ ДАТЧИКОВ", font=ctk.CTkFont(size=14, weight="bold")).grid(column=0,
+                                                                                                             row=0,
+                                                                                                             columnspan=3,
+                                                                                                             pady=10)
+
+        self._create_telemetry_row(sensor_frame, 1, "Лазер (Диагност):", self.telemetry_vars['diag_las'], unit="мм")
+        self._create_telemetry_row(sensor_frame, 2, "Лазер (Хирург):", self.telemetry_vars['hir_las'], unit="мм")
+        self._create_telemetry_row(sensor_frame, 3, "Сила (Диагност):", self.telemetry_vars['diag_force'], unit="Н")
+        self._create_telemetry_row(sensor_frame, 4, "Сила (Хирург):", self.telemetry_vars['hir_force'], unit="Н")
+
+        # Логирование
+        log_frame = ctk.CTkFrame(self.telemetry_tab, corner_radius=10)
+        log_frame.grid(column=0, row=2, columnspan=2, sticky="nsew", padx=10, pady=10)
+
+        self.toggle_telemetry_log_btn = ctk.CTkCheckBox(log_frame, text="Включить запись в CSV",
+                                                        variable=self.tel_logging_var,
+                                                        command=self.toggle_telemetry_logging, checkbox_width=20,
+                                                        checkbox_height=20)
+        self.toggle_telemetry_log_btn.grid(column=0, row=0, padx=20, pady=15, sticky="w")
+
+        self.telemetry_logging_status_label = ctk.CTkLabel(log_frame, text="⏺ Статус: ОТКЛЮЧЕНО",
+                                                           font=ctk.CTkFont(weight="bold"), text_color="#E74C3C")
+        self.telemetry_logging_status_label.grid(column=1, row=0, padx=20, pady=15, sticky="w")
+
+    def _create_telemetry_row(self, parent, row, label_text, variable, unit="", status_color="#3498DB"):
+        """Хелпер для создания строк телеметрии"""
+        lbl = ctk.CTkLabel(parent, text=label_text, font=ctk.CTkFont(weight="bold"))
+        lbl.grid(column=0, row=row, sticky="e", padx=15, pady=8)
+
+        # Поле данных с выделением
+        data_lbl = ctk.CTkLabel(parent, textvariable=variable, font=ctk.CTkFont(family="Consolas", size=13),
+                                corner_radius=5, fg_color="#2B2B2B", width=120, height=30)
+        data_lbl.grid(column=1, row=row, sticky="w", padx=10, pady=8)
+
+        if unit:
+            unit_lbl = ctk.CTkLabel(parent, text=unit, text_color="#888888", font=ctk.CTkFont(size=11))
+            unit_lbl.grid(column=2, row=row, sticky="w", padx=5)
 
     def toggle_telemetry_logging(self):
         if self.tel_logging_var.get():
@@ -1041,6 +1134,6 @@ if __name__ == '__main__':
     hirurg_path = proxy.list()
     hirurg_path.append([])
     root = tk.Tk()
-    app = ScriptRunnerApp(root)
+    app = RobotControlUI()
     root.protocol("WM_DELETE_WINDOW", on_closing)
-    root.mainloop()
+    app.mainloop()
