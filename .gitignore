@@ -3,3 +3,4 @@ build
 Э*
 logs
 .idea
+__pycache__

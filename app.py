@@ -686,6 +686,7 @@ class RobotControlUI(ctk.CTk):
         self.system_stop_btn.configure(state=tk.NORMAL)
         self.control_launch_btn.configure(state=tk.NORMAL)
         self.align_btn.configure(state=tk.NORMAL)
+
         self.processes['power_on_hirurg'] = {
             'process': mp.Process(target=Power_On_H.main, daemon=True),
             'last_heartbeat': time.time(),
@@ -694,6 +695,16 @@ class RobotControlUI(ctk.CTk):
             'state': 'AWAITING',
             'pid': None,
             'target': Power_On_H.main
+        }
+
+        self.processes['power_on_diagnost'] = {
+            'process': mp.Process(target=Power_On_D.main, daemon=True),
+            'last_heartbeat': time.time(),
+            'start_time': time.time(),
+            'params': None,
+            'state': 'AWAITING',
+            'pid': None,
+            'target': Power_On_D.main
         }
 
         self.monitor.start()
@@ -705,20 +716,31 @@ class RobotControlUI(ctk.CTk):
         self.control_stop_btn.configure(state=tk.DISABLED)
         self.control_launch_btn.configure(state=tk.DISABLED)
         self.align_btn.configure(state=tk.DISABLED)
-        self.power_off_h_process = mp.Process(target=Power_Off_H.main)
-        self.power_off_d_process = mp.Process(target=Power_Off_D.main)
+
+        self.processes['power_off_hirurg'] = {
+            'process': mp.Process(target=Power_Off_H.main, daemon=True),
+            'last_heartbeat': time.time(),
+            'start_time': time.time(),
+            'params': None,
+            'state': 'AWAITING',
+            'pid': None,
+            'target': Power_Off_H.main
+        }
+
+        self.processes['power_off_diagnost'] = {
+            'process': mp.Process(target=Power_Off_D.main, daemon=True),
+            'last_heartbeat': time.time(),
+            'start_time': time.time(),
+            'params': None,
+            'state': 'AWAITING',
+            'pid': None,
+            'target': Power_Off_D.main
+        }
 
     def control_launch(self):
         sleep(1)
-        global us_lock
-        print(self.control_d_process.exitcode)
-        if not us_lock:
-            if (not self.control_h_process.is_alive()) or (not self.control_d_process.is_alive()):
-                self.control_h_launch()
-                self.control_d_launch()
-
-            else:
-                program_lock.value = 0
+        if self.us_lock:
+            program_lock.value = 0
             self.control_stop_btn.configure(state=tk.NORMAL)
             self.control_launch_btn.configure(state=tk.DISABLED)
         else:
@@ -796,29 +818,7 @@ class RobotControlUI(ctk.CTk):
         print('control stopped')
         self.control_stop_btn.configure(state=tk.DISABLED)
         self.control_launch_btn.configure(state=tk.NORMAL)
-        print(self.control_d_process)
-        print(self.control_h_process)
-        if D:
-            print("Reinitiating diagnost control")
-            self.control_d_process.terminate()
-            self.control_d_process.join(timeout=3.0)
-            print(self.control_d_process)
-            sleep(1)
-            self.control_d_process = mp.Process(target=Joystick_diagnost.main,
-                                                args=(self.heartbeat, auto, shared_path, force_lock, program_lock),
-                                                daemon=True, name="diagnost_control")
-            print(self.control_d_process)
-        elif H:
-            self.control_h_process.terminate()
-            self.control_h_process.join(timeout=3.0)
-            print("Reinitiating hirurg control")
-            print(self.control_h_process)
-            sleep(1)
-            self.control_h_process = mp.Process(target=Joystick_hirurg.main,
-                                                args=(self.heartbeat, auto, program_lock, hirurg_path), daemon=True, name="hirurg_control")
-            print(self.control_h_process)
-        else:
-            program_lock.value = 1
+        program_lock.value = 1
 
     def align(self):
         print('aligned')
