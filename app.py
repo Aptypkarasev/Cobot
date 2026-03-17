@@ -1,9 +1,11 @@
 import tkinter as tk
-import tkinter.messagebox as mb
-from tkinter import ttk
+# import tkinter.messagebox as mb
+# from tkinter import ttk
 from tkinter import filedialog
 
 import customtkinter as ctk
+# import CTkFileDialog as filedialog
+from CTkMessagebox import CTkMessagebox as mb
 
 import subprocess
 import socket
@@ -50,7 +52,6 @@ program_lock = mp.Value("i", 0)
 # Настройки внешнего вида
 ctk.set_appearance_mode("Dark")  # Темы: "Dark", "Light", "System"
 ctk.set_default_color_theme("blue")  # Темы: "blue", "green", "dark-blue"
-
 
 def setup_status_logging(log_dir="logs", max_bytes=10 * 1024 * 1024, backup_count=5):
     log_dir = Path(log_dir)
@@ -358,16 +359,26 @@ class RobotControlUI(ctk.CTk):
         # Создание интерфейса
         self.create_tabs()
 
+        self.monitor = Thread(target=self.system_monitor, daemon=True)
+        self.monitor.start()
+
+        self.watchdog_thread = Thread(target=self.watchdog, daemon=True, name="Watchdog")
+        self.watchdog_thread.start()
+        logger.info(f"Запущен фоновый монитор сердцебиения (поток: {self.watchdog_thread.name})")
+
+        # self.force_control_thread = Thread(target=force_control, args = (17,))
+        # self.force_control_thread.start()
+
     def create_tabs(self):
         """Создание вкладок"""
         self.tab_view = ctk.CTkTabview(self, corner_radius=10)
         self.tab_view.pack(expand=True, fill="both", padx=10, pady=10)
 
         # Создание вкладок
-        self.control_tab = self.tab_view.add('РПК')
-        self.route_tab = self.tab_view.add('ППУИ')
-        self.aphi_tab = self.tab_view.add('АПХИ')
-        self.ashido_tab = self.tab_view.add('АСХИДО')
+        self.control_tab = self.tab_view.add('Управление')
+        self.route_tab = self.tab_view.add('Исследование')
+        self.aphi_tab = self.tab_view.add('Воздействие')
+        self.ashido_tab = self.tab_view.add('Операция')
         self.cam_tab = self.tab_view.add('Камеры')
         self.telemetry_tab = self.tab_view.add('Телеметрия')
 
@@ -675,8 +686,15 @@ class RobotControlUI(ctk.CTk):
         self.system_stop_btn.configure(state=tk.NORMAL)
         self.control_launch_btn.configure(state=tk.NORMAL)
         self.align_btn.configure(state=tk.NORMAL)
-        self.power_on_h_process.start()
-        self.power_on_d_process.start()
+        self.processes['power_on_hirurg'] = {
+            'process': mp.Process(target=Power_On_H.main, daemon=True),
+            'last_heartbeat': time.time(),
+            'start_time': time.time(),
+            'params': None,
+            'state': 'AWAITING',
+            'pid': None,
+            'target': Power_On_H.main
+        }
 
         self.monitor.start()
 
@@ -1027,6 +1045,13 @@ class RobotControlUI(ctk.CTk):
                     error_msg = msg[2]
                     logger.critical(f"Процесс {name} (PID: {proc['pid']}) аварийно завершился: {error_msg}")
                     self._force_restart(name, reason=f"Аварийное завершение: {error_msg}")
+                elif msg_type == "AWAITING":
+                    logger.info(f"Процесс {name} ожидает запуска")
+                    self._start_process(name)
+                elif msg_type == "FINISHED":
+                    logger.info(f"Процесс {name} завершил работу без ошибок")
+                    self._close_process(name)
+
 
             for name in list(self.processes.keys()):
                 proc = self.processes[name]
@@ -1046,6 +1071,29 @@ class RobotControlUI(ctk.CTk):
                         self._force_restart(name, reason="Зависание процесса (таймаут сердцебиения)")
 
             time.sleep(1.0)
+
+    def _close_process(self, name):
+        self.processes[name]['process'].terminate()
+        self.processes[name]['process'].join(timeout=3.0)
+        self.processes[name] = None
+
+    def _start_process(self,name):
+        logger.info(f"Запуск процесса {name}")
+        target_func = self.processes[name]['target']
+        params = self.processes[name]['params']
+
+        p = mp.Process(target=target_func, args=params, daemon=True, name=name)
+        p.start()
+
+        self.processes[name] = {
+            'process': p,
+            'last_heartbeat': time.time(),
+            'start_time': time.time(),
+            'params': params,
+            'state': 'STARTING',
+            'pid': p.pid,
+            'target': target_func
+        }
 
     def _update_status(self, name, state, color):
         pass
@@ -1112,10 +1160,10 @@ class RobotControlUI(ctk.CTk):
         pass
 
     def show_error(self, msg):
-        mb.showerror("ОШИБКА!", msg)
+        mb(title="ОШИБКА!", message=msg, icon="cancel")
 
     def show_warning(self, msg):
-        mb.showwarning("ВНИМАНИЕ!", msg)
+        mb(title="ВНИМАНИЕ!", message=msg, icon="warning")
 
 def on_closing():
     logger.info(f"Получен сигнал закрытия приложения")
@@ -1123,7 +1171,7 @@ def on_closing():
         app.processes[name]["process"].kill()
         app.processes[name]["process"].join(timeout=2.0)
     logger.info("Все процессы остановлены. Завершение работы.")
-    root.destroy()
+    app.destroy()
 
 if __name__ == '__main__':
     logger = setup_status_logging()
@@ -1133,7 +1181,7 @@ if __name__ == '__main__':
     shared_path.append([])
     hirurg_path = proxy.list()
     hirurg_path.append([])
-    root = tk.Tk()
+    # root = tk.Tk()
     app = RobotControlUI()
-    root.protocol("WM_DELETE_WINDOW", on_closing)
+    app.protocol("WM_DELETE_WINDOW", on_closing)
     app.mainloop()
