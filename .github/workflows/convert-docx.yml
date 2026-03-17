@@ -1,0 +1,51 @@
+name: Convert DOCX to README
+
+on:
+  push:
+    paths:
+      - 'docs/source.docx' # Путь к вашему исходному файлу Word
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Pandoc
+        run: sudo apt-get install -y pandoc
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install pypandoc
+
+      - name: Run Conversion and Handle Images
+        run: |
+          mkdir -p media 
+
+          python -c "
+          import pypandoc
+          import os
+          output = pypandoc.convert_file('docs/source.docx', 'markdown', extra_args=['--extract-media=.', '--standalone'])
+          with open('README.md', 'w', encoding='utf-8') as f:
+              f.write(output)
+          "
+
+          git add README.md
+          git add *.png *.jpg *.jpeg *.gif 2>/dev/null || true
+          git add media/*.png media/*.jpg media/*.jpeg media/*.gif 2>/dev/null || true
+
+          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update README and images from DOCX"
+          git push
+
+      - name: Commit and Push if changed
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add README.md
+          git diff --quiet && git diff --staged --quiet || git commit -m "Auto-update README from DOCX"
+          git push
