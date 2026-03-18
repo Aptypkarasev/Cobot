@@ -212,9 +212,5 @@ def main(IP, is_master, auto, lock, shared_path, heartbeat, slave_IP=None):
 
     proc_logger.info(f"Запуск рабочего процесса | PID: {os.getpid()}")
 
-    proc_logger.debug("Подключение к роботу...")
-    robot = urx.Robot("192.168.8.4")  # установление соединения с хирургом
-    proc_logger.info(f"Успешное подключение к роботу")
-
     robot = Robot(IP, is_master, proc_logger, auto, lock, shared_path, heartbeat, slave_IP)
     robot.start_robot()

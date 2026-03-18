@@ -3,8 +3,9 @@
 # E-series:  https://www.universal-robots.com/how-tos-and-faqs/how-to/ur-how-tos/dashboard-server-e-series-port-29999-42728/
 import socket
 import time
+import multiprocessing as mp
 
-def main():
+def main(heartbeat):
     HOST = "192.168.8.3"
     PORT = 29999
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -22,6 +23,4 @@ def main():
     cmd = "brake release\n"
 
     s.send(cmd.encode())
-
-if __name__ == "__main__":
-    main()
+    heartbeat.put((mp.current_process().name, "FINISHED"))

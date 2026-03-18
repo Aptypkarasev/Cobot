@@ -38,6 +38,7 @@ import Joystick_hirurg
 import Power_On_D
 import Power_Off_H
 import Power_Off_D
+import robot_control
 
 rob_us_data = []
 us_lock = False
@@ -52,6 +53,7 @@ program_lock = mp.Value("i", 0)
 # Настройки внешнего вида
 ctk.set_appearance_mode("Dark")  # Темы: "Dark", "Light", "System"
 ctk.set_default_color_theme("blue")  # Темы: "blue", "green", "dark-blue"
+
 
 def setup_status_logging(log_dir="logs", max_bytes=10 * 1024 * 1024, backup_count=5):
     log_dir = Path(log_dir)
@@ -104,7 +106,9 @@ class CSVLogger:
         if not os.path.exists(self.filename):
             with open(self.filename, "w", newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(["timestamp","robot", "temperature", "X", "Y", "Z", "J1","J2","J3","J4", "J5", "J6", "FX", "FY", "FZ", "MX", "MY", "MZ"])
+                writer.writerow(
+                    ["timestamp", "robot", "temperature", "X", "Y", "Z", "J1", "J2", "J3", "J4", "J5", "J6", "FX", "FY",
+                     "FZ", "MX", "MY", "MZ"])
 
     def enable(self):
         self.enabled = True
@@ -120,10 +124,9 @@ class CSVLogger:
             timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
             with open(self.filename, "a", newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow([timestamp]+[data])
+                writer.writerow([timestamp] + [data])
         except Exception as e:
             logger.error(f'Ошибка логгирования телеметрии: {type(e).__name__}:{str(e)[:100]}')
-
 
 
 def force_control(threshold):
@@ -344,6 +347,13 @@ class RobotControlUI(ctk.CTk):
         self.restart_delays = {}
         self.tel_logging_var = ctk.BooleanVar(value=False)
 
+        self.ppui_stop_event = threading.Event()
+        self.monitor_stop_event = threading.Event()
+        self.watchdog_stop_event = threading.Event()
+
+        self.surgeon_ip = "192.168.8.4"
+        self.diagnost_ip = "192.168.8.3"
+
         # Переменные для телеметрии
         self.telemetry_vars = {
             'diag_status': ctk.StringVar(value="Откл"),
@@ -360,7 +370,7 @@ class RobotControlUI(ctk.CTk):
         self.create_tabs()
 
         self.monitor = Thread(target=self.system_monitor, daemon=True)
-        self.monitor.start()
+        # self.monitor.start()
 
         self.watchdog_thread = Thread(target=self.watchdog, daemon=True, name="Watchdog")
         self.watchdog_thread.start()
@@ -414,29 +424,38 @@ class RobotControlUI(ctk.CTk):
                                              state="disabled", fg_color="#E74C3C", hover_color="#C0392B")
         self.system_stop_btn.grid(column=1, row=1, padx=10, pady=5, sticky="ew")
 
+        self.control_initiate_btn = ctk.CTkButton(left_frame, text='Инициализировать контроллеры',
+                                                  command=self.control_initiate, fg_color="#2CC985",
+                                                  hover_color="#25A56E")
+        self.control_initiate_btn.grid(column=0, row=2, padx=10, pady=5, sticky="ew")
+
+        self.control_disable_btn = ctk.CTkButton(left_frame, text='Отключить контроллеры',
+                                                  command=self.control_initiate, state="disabled", fg_color="#E74C3C", hover_color="#C0392B")
+        self.control_disable_btn.grid(column=1, row=2, padx=10, pady=5, sticky="ew")
+
         # Разделитель
         sep1 = ctk.CTkFrame(left_frame, height=2, fg_color="#555555")
-        sep1.grid(column=0, row=2, columnspan=2, pady=10, sticky="ew")
+        sep1.grid(column=0, row=4, columnspan=2, pady=10, sticky="ew")
 
         # Управление
         robot_label = ctk.CTkLabel(left_frame, text="РОБОТЫ", font=ctk.CTkFont(size=14, weight="bold"))
-        robot_label.grid(column=0, row=3, columnspan=2, pady=(10, 5))
+        robot_label.grid(column=0, row=4, columnspan=2, pady=(10, 5))
 
         self.control_launch_btn = ctk.CTkButton(left_frame, text='Запуск управления', command=self.control_launch,
                                                 state="disabled")
-        self.control_launch_btn.grid(column=0, row=4, padx=10, pady=5, sticky="ew")
+        self.control_launch_btn.grid(column=0, row=5, padx=10, pady=5, sticky="ew")
 
         self.control_stop_btn = ctk.CTkButton(left_frame, text='Остановка упр.', command=self.control_stop,
                                               state="disabled",
                                               fg_color="#E74C3C", hover_color="#C0392B")
-        self.control_stop_btn.grid(column=1, row=4, padx=10, pady=5, sticky="ew")
+        self.control_stop_btn.grid(column=1, row=5, padx=10, pady=5, sticky="ew")
 
         self.align_btn = ctk.CTkButton(left_frame, text='Выравнивание', command=self.align, state="disabled")
-        self.align_btn.grid(column=0, row=5, padx=10, pady=5, sticky="ew")
+        self.align_btn.grid(column=0, row=6, padx=10, pady=5, sticky="ew")
 
         self.unlock_btn = ctk.CTkButton(left_frame, text='Разблокировка', command=self.unlock,
                                         fg_color="#E67E22", hover_color="#D35400")
-        self.unlock_btn.grid(column=1, row=5, padx=10, pady=5, sticky="ew")
+        self.unlock_btn.grid(column=1, row=6, padx=10, pady=5, sticky="ew")
 
         # --- Правая колонка: Маршруты ---
         right_frame = ctk.CTkFrame(self.control_tab, corner_radius=10)
@@ -480,31 +499,31 @@ class RobotControlUI(ctk.CTk):
 
         # Количество шагов
         ctk.CTkLabel(params_frame, text="Количество шагов:").grid(column=0, row=1, sticky="e", padx=10, pady=5)
-        self.num_steps_entry = ctk.CTkEntry(params_frame, width=100)
+        self.num_steps_entry = ctk.CTkEntry(params_frame, width=100,placeholder_text='30')
         self.num_steps_entry.grid(column=1, row=1, sticky="w", padx=5, pady=5)
 
         # Величина шага
         ctk.CTkLabel(params_frame, text="Величина шага (м):").grid(column=0, row=2, sticky="e", padx=10, pady=5)
 
         ctk.CTkLabel(params_frame, text="X:").grid(column=2, row=2, padx=5)
-        self.step_x_entry = ctk.CTkEntry(params_frame, width=60)
+        self.step_x_entry = ctk.CTkEntry(params_frame, width=60, placeholder_text='0.005')
         self.step_x_entry.grid(column=3, row=2, padx=2, pady=5)
 
         ctk.CTkLabel(params_frame, text="Y:").grid(column=4, row=2, padx=5)
-        self.step_y_entry = ctk.CTkEntry(params_frame, width=60)
+        self.step_y_entry = ctk.CTkEntry(params_frame, width=60,placeholder_text='0.005')
         self.step_y_entry.grid(column=5, row=2, padx=2, pady=5)
 
         ctk.CTkLabel(params_frame, text="Z:").grid(column=6, row=2, padx=5)
-        self.step_z_entry = ctk.CTkEntry(params_frame, width=60)
+        self.step_z_entry = ctk.CTkEntry(params_frame, width=60,placeholder_text='0.005')
         self.step_z_entry.grid(column=7, row=2, padx=2, pady=5)
 
         # Время и скорость
         ctk.CTkLabel(params_frame, text="Время остановки (с):").grid(column=0, row=3, sticky="e", padx=10, pady=5)
-        self.pause_time_entry = ctk.CTkEntry(params_frame, width=100)
+        self.pause_time_entry = ctk.CTkEntry(params_frame, width=100, placeholder_text='1')
         self.pause_time_entry.grid(column=1, row=3, sticky="w", padx=5, pady=5)
 
         ctk.CTkLabel(params_frame, text="Скорость (м/с):").grid(column=0, row=4, sticky="e", padx=10, pady=5)
-        self.velocity_entry = ctk.CTkEntry(params_frame, width=100)
+        self.velocity_entry = ctk.CTkEntry(params_frame, width=100, placeholder_text='0.005')
         self.velocity_entry.grid(column=1, row=4, sticky="w", padx=5, pady=5)
 
         # Кнопки действий
@@ -681,61 +700,65 @@ class RobotControlUI(ctk.CTk):
             self.telemetry_logging_status_label.config(text="Логирование: ВЫКЛЮЧЕНО", foreground="red")
 
     def system_launch(self):
-        print('System launched')
-        self.system_launch_btn.configure(state=tk.DISABLED)
-        self.system_stop_btn.configure(state=tk.NORMAL)
-        self.control_launch_btn.configure(state=tk.NORMAL)
-        self.align_btn.configure(state=tk.NORMAL)
+        self.system_launch_btn.configure(state=ctk.DISABLED)
+        self.system_stop_btn.configure(state=ctk.NORMAL)
+        self.control_launch_btn.configure(state=ctk.NORMAL)
+        self.align_btn.configure(state=ctk.NORMAL)
+        params = (self.heartbeat,)
 
-        self.processes['power_on_hirurg'] = {
-            'process': mp.Process(target=Power_On_H.main, daemon=True),
+        self.processes['power_on_surgeon'] = {
+            'process': mp.Process(target=Power_On_H.main, daemon=True, name='power_on_surgeon', args=params),
             'last_heartbeat': time.time(),
             'start_time': time.time(),
-            'params': None,
+            'params': params,
             'state': 'AWAITING',
             'pid': None,
             'target': Power_On_H.main
         }
+        self.heartbeat.put(('power_on_surgeon', "AWAITING"))
 
         self.processes['power_on_diagnost'] = {
-            'process': mp.Process(target=Power_On_D.main, daemon=True),
+            'process': mp.Process(target=Power_On_D.main, daemon=True, name='power_on_diagnost', args=params),
             'last_heartbeat': time.time(),
             'start_time': time.time(),
-            'params': None,
+            'params': params,
             'state': 'AWAITING',
             'pid': None,
             'target': Power_On_D.main
         }
-
+        self.heartbeat.put(('power_on_diagnost', "AWAITING"))
         self.monitor.start()
 
     def system_stop(self):
         print('system_stopped')
-        self.system_launch_btn.configure(state=tk.NORMAL)
-        self.system_stop_btn.configure(state=tk.DISABLED)
-        self.control_stop_btn.configure(state=tk.DISABLED)
-        self.control_launch_btn.configure(state=tk.DISABLED)
-        self.align_btn.configure(state=tk.DISABLED)
+        self.system_launch_btn.configure(state=ctk.NORMAL)
+        self.system_stop_btn.configure(state=ctk.DISABLED)
+        self.control_stop_btn.configure(state=ctk.DISABLED)
+        self.control_launch_btn.configure(state=ctk.DISABLED)
+        self.align_btn.configure(state=ctk.DISABLED)
+        params = (self.heartbeat, )
 
-        self.processes['power_off_hirurg'] = {
-            'process': mp.Process(target=Power_Off_H.main, daemon=True),
+        self.processes['power_off_surgeon'] = {
+            'process': mp.Process(target=Power_Off_H.main, daemon=True, name='power_off_surgeon', args=params),
             'last_heartbeat': time.time(),
             'start_time': time.time(),
-            'params': None,
+            'params': params,
             'state': 'AWAITING',
             'pid': None,
             'target': Power_Off_H.main
         }
+        self.heartbeat.put(('power_off_surgeon', 'AWAITING'))
 
         self.processes['power_off_diagnost'] = {
-            'process': mp.Process(target=Power_Off_D.main, daemon=True),
+            'process': mp.Process(target=Power_Off_D.main, daemon=True, name='power_off_diagnost', args=params),
             'last_heartbeat': time.time(),
             'start_time': time.time(),
-            'params': None,
+            'params': params,
             'state': 'AWAITING',
             'pid': None,
             'target': Power_Off_D.main
         }
+        self.heartbeat.put(('power_off_diagnost', 'AWAITING'))
 
     def control_launch(self):
         sleep(1)
@@ -746,75 +769,37 @@ class RobotControlUI(ctk.CTk):
         else:
             self.show_error("ППУИ запущено!")
 
-    def control_d_launch(self):
-        if not self.control_d_process.is_alive():
-            self.control_d_process.start()
-            sleep(5)
-            if self.control_d_process.is_alive():
-                print("diagnost control launched")
-                self.attempt_d_counter = 0
-                params = (self.heartbeat, auto, shared_path, force_lock, program_lock)
-                self.processes['diagnost_control'] = {
-                    'process': self.control_d_process,
-                    'last_heartbeat': time.time(),
-                    'start_time': time.time(),
-                    'params': params,
-                    'state': 'STARTING',
-                    'pid': self.control_d_process.pid,
-                    'target': Joystick_diagnost.main
-                }
-                logger.info(
-                    f'Запущен процесс {"diagnost_control"} | PID {self.control_d_process.pid} | Taймаут сердцебиения: {self.heartbeat_timeout}s'
-                )
-                self._update_status('diagnost_control', "STARTING", "orange")
-            else:
-                print("Error while initiating diagnost control")
-                self.control_stop(D=1)
-                sleep(5)
-                if self.attempt_d_counter <= 5:
-                    print("Retrying to initiate diagnost control")
-                    self.attempt_d_counter += 1
-                    self.control_d_launch()
-                else:
-                    self.show_error(
-                        "Не удаётся запустить управление диагностом\nПроверьте состояние робота, он должен быть включен и разблокирован.")
-                    self.attempt_d_counter = 0
+    def control_initiate(self):
+        surgeon_params = (self.surgeon_ip, True, auto, program_lock, shared_path, self.heartbeat, self.diagnost_ip)
+        diagnost_params = (self.diagnost_ip, False, auto, program_lock, shared_path, self.heartbeat)
 
-    def control_h_launch(self):
-        if not self.control_h_process.is_alive():
-            self.control_h_process.start()
-            sleep(5)
-            if self.control_h_process.is_alive():
-                print("hirurg control launched")
-                self.attempt_h_counter = 0
-                params = (self.heartbeat, auto, program_lock, hirurg_path)
-                self.processes['hirurg_control'] = {
-                    'process': self.control_h_process,
-                    'last_heartbeat': time.time(),
-                    'start_time': time.time(),
-                    'params': params,
-                    'state': 'STARTING',
-                    'pid': self.control_h_process.pid,
-                    'target': Joystick_hirurg.main
-                }
-                logger.info(
-                    f'Запущен процесс {"hirurg_control"} | PID {self.control_d_process.pid} | Taймаут сердцебиения: {self.heartbeat_timeout}s'
-                )
-                self._update_status('hirurg_control', "STARTING", "orange")
-            else:
-                print("Error while initiating hirurg control")
-                self.control_stop(H=1)
-                sleep(10)
-                if self.attempt_h_counter <= 5:
-                    print("Retrying to initiate hirurg control")
-                    self.attempt_h_counter += 1
-                    self.control_h_launch()
-                else:
-                    self.show_error(
-                        "Не удаётся запустить управление хирургом\nПроверьте состояние робота, он должен быть включен и разблокирован.")
-                    self.attempt_h_counter = 0
+        self.processes['surgeon_control'] = {
+            'process': mp.Process(target=robot_control.main, daemon=True, name='surgeon_control', args=surgeon_params),
+            'last_heartbeat': time.time(),
+            'start_time': time.time(),
+            'params': surgeon_params,
+            'state': 'AWAITING',
+            'pid': None,
+            'target': robot_control.main
+        }
+        self.heartbeat.put(("surgeon_control", "AWAITING"))
+        self.processes['diagnost_control'] = {
+            'process': mp.Process(target=robot_control.main, daemon=True, name='diagnost_control',
+                                  args=diagnost_params),
+            'last_heartbeat': time.time(),
+            'start_time': time.time(),
+            'params': diagnost_params,
+            'state': 'AWAITING',
+            'pid': None,
+            'target': robot_control.main
+        }
+        self.heartbeat.put(("diagnost_control", "AWAITING"))
 
-    def control_stop(self, H=0, D=0):
+    def control_disable(self):
+        self.heartbeat.put(("diagnost_control","FINISHED"))
+        self.heartbeat.put(("surgeon_control", "FINISHED"))
+
+    def control_stop(self):
         print('control stopped')
         self.control_stop_btn.configure(state=tk.DISABLED)
         self.control_launch_btn.configure(state=tk.NORMAL)
@@ -980,7 +965,7 @@ class RobotControlUI(ctk.CTk):
     def system_monitor(self):
         diagnost = urx.Robot("192.168.8.3", use_rt=True)
         hirurg = urx.Robot("192.168.8.4", use_rt=True)
-        while True:
+        while not self.monitor_stop_event.is_set():
             diagnost_status = diagnost.is_running()
             hirurg_status = hirurg.is_running()
 
@@ -997,15 +982,19 @@ class RobotControlUI(ctk.CTk):
             self.diagnost_force_data_label.config(
                 text=f'X:{diagnost_force[0]:.2f}, Y: {diagnost_force[1]:.2f}, Z: {diagnost_force[2]:.2f}')
 
-            self.telemetry_logger.log_data(["диагност"]+list(diagnost_pose[:3]) +list(diagnost_joints) + list(diagnost_force))
-            self.telemetry_logger.log_data(["хирург"] + list(hirurg_pose[:3]) + list(hirurg_joints) + list(hirurg_force))
+            self.telemetry_logger.log_data(
+                ["диагност"] + list(diagnost_pose[:3]) + list(diagnost_joints) + list(diagnost_force))
+            self.telemetry_logger.log_data(
+                ["хирург"] + list(hirurg_pose[:3]) + list(hirurg_joints) + list(hirurg_force))
             time.sleep(1)
 
             # self.diagnost_force_data_entry.set(diagnost_force)
+        diagnost.close()
+        hirurg.close()
 
     def watchdog(self):
         logger.debug("Запущен цикл мониторинга сердцебиения")
-        while True:
+        while not self.watchdog_stop_event.is_set():
             current_time = time.time()
             while not self.heartbeat.empty():
                 msg = self.heartbeat.get()
@@ -1052,7 +1041,6 @@ class RobotControlUI(ctk.CTk):
                     logger.info(f"Процесс {name} завершил работу без ошибок")
                     self._close_process(name)
 
-
             for name in list(self.processes.keys()):
                 proc = self.processes[name]
                 time_since_hb = current_time - proc["last_heartbeat"]
@@ -1077,7 +1065,7 @@ class RobotControlUI(ctk.CTk):
         self.processes[name]['process'].join(timeout=3.0)
         self.processes[name] = None
 
-    def _start_process(self,name):
+    def _start_process(self, name):
         logger.info(f"Запуск процесса {name}")
         target_func = self.processes[name]['target']
         params = self.processes[name]['params']
@@ -1165,6 +1153,7 @@ class RobotControlUI(ctk.CTk):
     def show_warning(self, msg):
         mb(title="ВНИМАНИЕ!", message=msg, icon="warning")
 
+
 def on_closing():
     logger.info(f"Получен сигнал закрытия приложения")
     for name in list(app.processes.keys()):
@@ -1172,6 +1161,7 @@ def on_closing():
         app.processes[name]["process"].join(timeout=2.0)
     logger.info("Все процессы остановлены. Завершение работы.")
     app.destroy()
+
 
 if __name__ == '__main__':
     logger = setup_status_logging()
